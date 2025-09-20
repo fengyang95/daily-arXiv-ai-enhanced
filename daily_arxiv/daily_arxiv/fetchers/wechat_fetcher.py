@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import List, Dict, Any
 import requests
 
-
+os.environ['WECHAT_API_TOKEN']='dXWF5iZm'
 class WeChatFetcher:
     """Fetches and processes WeChat articles using Unified Search API to match arXiv format"""
 
@@ -98,6 +98,7 @@ class WeChatFetcher:
         
         total_fetched = 0
         total_filtered = 0
+        consecutive_low_filter = 0  # Track consecutive pages with low filtered results
 
         while True:
             # Build API URL with new parameters
@@ -165,23 +166,50 @@ class WeChatFetcher:
                     
                     print(f"Fetched {len(articles)} articles, filtered {len(page_filtered_articles)} (total fetched: {total_fetched}, filtered: {total_filtered}) for keyword '{keyword}'")
                     
+                    # Track consecutive pages with low filtered results
+                    if len(page_filtered_articles) < limit * 0.3:  # Less than 30% of page limit
+                        consecutive_low_filter += 1
+                        print(f"Low filter rate detected: {consecutive_low_filter} consecutive pages")
+                    else:
+                        consecutive_low_filter = 0  # Reset counter if we get good results
+                    
                     # Early termination logic: Since API sorts by latest (newest first),
-                    # if we get a page where all articles are older than our start date,
-                    # we can stop paginating because subsequent pages will only have older articles
+                    # if we get very few filtered articles from current page, subsequent pages
+                    # will have even fewer articles in our date range, so we can stop early
+                    
+                    # Key insight: if filtered articles < some threshold, we're moving out of date range
+                    # since API returns newest first, subsequent pages will be older and have even fewer matches
+                    if len(page_filtered_articles) < 3:  # Less than 3 articles in date range from this page
+                        print(f"Very few articles ({len(page_filtered_articles)}) in date range from this page, stopping early")
+                        success = True
+                        break
+                    
+                    # Also check if the oldest article in this page is already outside our date range
                     if len(articles) > 0:
-                        # Get the oldest timestamp from this page
                         page_timestamps = [article.get('timestamp', 0) for article in articles if article.get('timestamp', 0)]
                         if page_timestamps:
                             oldest_in_page = min(page_timestamps)
                             # If the oldest article in this page is older than our start date,
-                            # and we have no filtered articles from this page, we can stop
-                            if oldest_in_page < start_timestamp and len(page_filtered_articles) == 0:
+                            # subsequent pages will only have older articles, so we can stop
+                            if oldest_in_page < start_timestamp:
                                 print(f"Oldest article in page is older than start date, stopping pagination early")
                                 success = True
                                 break
                     
-                    # Stop if we've fetched all articles or reached reasonable limit
-                    if len(articles) < limit or total_fetched >= total_count or total_fetched >= 100:
+                    # Stop pagination conditions:
+                    # 1. Raw articles less than limit means we've reached the end of available data
+                    # 2. We've fetched the total count reported by API  
+                    # 3. We've reached our reasonable maximum limit
+                    if len(articles) < limit:
+                        print(f"Reached end of available data (got {len(articles)} < {limit} raw articles)")
+                        success = True
+                        break
+                    elif total_fetched >= total_count:
+                        print(f"Fetched all {total_count} articles reported by API")
+                        success = True
+                        break
+                    elif total_fetched >= 100:
+                        print(f"Reached maximum limit of 100 articles")
                         success = True
                         break
                     
@@ -406,8 +434,9 @@ def main():
     articles = fetcher.fetch_articles()
 
     # Output as JSONL
-    today = datetime.now().strftime("%Y-%m-%d")
-    output_file = f"data/{today}_wechat.jsonl"
+    # today = datetime.now().strftime("%Y-%m-%d")
+    start_date = datetime.fromtimestamp(datetime.now().timestamp() - 1 * 24 * 3600).strftime("%Y-%m-%d")
+    output_file = f"data/{start_date}_wechat.jsonl"
 
     os.makedirs("data", exist_ok=True)
     with open(output_file, 'w', encoding='utf-8') as f:
