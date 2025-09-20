@@ -11,8 +11,6 @@ import time
 from datetime import datetime
 from typing import List, Dict, Any
 import requests
-
-os.environ['WECHAT_API_TOKEN']='dXWF5iZm'
 class WeChatFetcher:
     """Fetches and processes WeChat articles using Unified Search API to match arXiv format"""
 
